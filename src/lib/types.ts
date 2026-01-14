@@ -45,3 +45,12 @@ export interface ApiResponse<T> {
   data?: T;
   error?: string;
 }
+
+// 文件信息（用于目录浏览）
+export interface FileInfo {
+  name: string;        // 文件名
+  path: string;        // 完整路径
+  isDirectory: boolean;
+  size: number;        // 文件大小 (bytes)
+  modifiedAt: string;  // 修改时间
+}

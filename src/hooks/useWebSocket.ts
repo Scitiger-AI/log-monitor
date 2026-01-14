@@ -19,7 +19,7 @@ type LogCallback = (logFileId: string, content: string) => void;
 
 export function useWebSocket(onLog: LogCallback) {
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const { updatePanelStatus } = useStore();
 
   const connect = useCallback(() => {

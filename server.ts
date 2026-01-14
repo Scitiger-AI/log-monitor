@@ -50,12 +50,33 @@ app.prepare().then(() => {
   });
 
   // 优雅关闭
+  let isShuttingDown = false;
+
   const shutdown = () => {
+    // 防止重复触发
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log('\nShutting down...');
+
+    // 关闭 WebSocket 连接和日志流
     wsManager.close();
     sshPool.closeAll();
+
+    // 强制关闭所有连接（Node.js 18.2+）
+    httpServer.closeAllConnections();
+
+    // 关闭 HTTP 服务器
     httpServer.close(() => {
+      console.log('Server closed');
       process.exit(0);
     });
+
+    // 超时强制退出（3秒）
+    setTimeout(() => {
+      console.log('Force exit after timeout');
+      process.exit(1);
+    }, 3000).unref();
   };
 
   process.on('SIGINT', shutdown);

@@ -1,10 +1,32 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useMemo, memo, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
-import { X, Circle, Server as ServerIcon } from 'lucide-react';
+import { X, Circle, Server as ServerIcon, GripVertical } from 'lucide-react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
+  UniqueIdentifier,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import type { DraggableAttributes } from '@dnd-kit/core';
+import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { LogTerminal } from './LogTerminal';
-import { LogPanel as LogPanelType, Server } from '@/store';
+import { LogPanel as LogPanelType, Server, useStore } from '@/store';
 
 interface LogTabsProps {
   panels: LogPanelType[];
@@ -14,20 +36,331 @@ interface LogTabsProps {
   onTerminalReady: (logFileId: string, terminal: Terminal) => void;
 }
 
+// 状态颜色映射
+const STATUS_COLORS: Record<LogPanelType['status'], string> = {
+  connecting: 'text-yellow-500',
+  connected: 'text-green-500',
+  disconnected: 'text-gray-500',
+  error: 'text-red-500',
+};
+
+// 拖拽手柄组件
+interface DragHandleProps {
+  attributes: DraggableAttributes;
+  listeners: SyntheticListenerMap | undefined;
+}
+
+const DragHandle = memo(function DragHandle({ attributes, listeners }: DragHandleProps) {
+  return (
+    <button
+      {...attributes}
+      {...listeners}
+      className="p-1 hover:bg-gray-600 rounded cursor-grab active:cursor-grabbing touch-none"
+      title="拖拽排序"
+    >
+      <GripVertical className="w-4 h-4 text-gray-500" />
+    </button>
+  );
+});
+
+// Terminal 容器 - 使用 memo 确保不会因为父组件重新渲染而卸载
+interface TerminalContainerProps {
+  logFileId: string;
+  onTerminalReady: (logFileId: string, terminal: Terminal) => void;
+}
+
+const TerminalContainer = memo(function TerminalContainer({
+  logFileId,
+  onTerminalReady,
+}: TerminalContainerProps) {
+  const onReadyRef = useRef(onTerminalReady);
+  onReadyRef.current = onTerminalReady;
+
+  const handleReady = useCallback((terminal: Terminal) => {
+    onReadyRef.current(logFileId, terminal);
+  }, [logFileId]);
+
+  return (
+    <div className="flex-1 min-h-0">
+      <LogTerminal onReady={handleReady} />
+    </div>
+  );
+}, (prev, next) => prev.logFileId === next.logFileId);
+
+// 可排序面板组件
+interface SortablePanelProps {
+  panel: LogPanelType;
+  panelCount: number;
+  orderIndex: number;
+  onClose: (panel: LogPanelType) => void;
+  onTerminalReady: (logFileId: string, terminal: Terminal) => void;
+}
+
+const SortablePanel = memo(function SortablePanel({
+  panel,
+  panelCount,
+  orderIndex,
+  onClose,
+  onTerminalReady,
+}: SortablePanelProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: panel.id });
+
+  const style = useMemo(() => ({
+    transform: CSS.Transform.toString(transform),
+    transition,
+    height: panelCount === 1 ? '100%' : '350px',
+    minHeight: '250px',
+    order: orderIndex, // 使用 CSS order 控制显示顺序
+  }), [transform, transition, panelCount, orderIndex]);
+
+  const handleClose = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClose(panel);
+  }, [onClose, panel]);
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`bg-[#1a1a1a] rounded border flex flex-col ${
+        isDragging ? 'border-blue-500 shadow-lg shadow-blue-500/20 opacity-50 z-50' : 'border-gray-700'
+      }`}
+    >
+      {/* 日志面板头部 */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#252525] border-b border-gray-700 rounded-t">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <DragHandle attributes={attributes} listeners={listeners} />
+          <Circle className={`w-2 h-2 fill-current flex-shrink-0 ${STATUS_COLORS[panel.status]}`} />
+          <span className="text-sm text-gray-200 truncate">{panel.logFile.name}</span>
+          <span className="text-xs text-gray-500 truncate max-w-[200px]" title={panel.logFile.path}>
+            {panel.logFile.path}
+          </span>
+        </div>
+        <button
+          onClick={handleClose}
+          className="p-1 hover:bg-gray-600 rounded transition-colors flex-shrink-0"
+          title="关闭此日志"
+        >
+          <X className="w-3 h-3 text-gray-400" />
+        </button>
+      </div>
+
+      {/* 错误信息 */}
+      {panel.status === 'error' && panel.errorMessage && (
+        <div className="px-3 py-1.5 bg-red-900/30 text-red-400 text-xs">
+          {panel.errorMessage}
+        </div>
+      )}
+
+      {/* Terminal - 独立组件，不受拖拽影响 */}
+      <TerminalContainer
+        logFileId={panel.logFileId}
+        onTerminalReady={onTerminalReady}
+      />
+    </div>
+  );
+}, (prev, next) => {
+  return (
+    prev.panel.id === next.panel.id &&
+    prev.panel.status === next.panel.status &&
+    prev.panel.errorMessage === next.panel.errorMessage &&
+    prev.panelCount === next.panelCount &&
+    prev.orderIndex === next.orderIndex &&
+    prev.onClose === next.onClose &&
+    prev.onTerminalReady === next.onTerminalReady
+  );
+});
+
+// 拖拽时的预览卡片
+function DragOverlayCard({ panel }: { panel: LogPanelType }) {
+  return (
+    <div
+      className="bg-[#1a1a1a] rounded border border-blue-500 shadow-xl shadow-blue-500/30"
+      style={{ width: '400px', height: '100px' }}
+    >
+      <div className="flex items-center gap-2 px-3 py-2 bg-[#252525] border-b border-gray-700 rounded-t">
+        <GripVertical className="w-4 h-4 text-blue-400" />
+        <Circle className={`w-2 h-2 fill-current ${STATUS_COLORS[panel.status]}`} />
+        <span className="text-sm text-gray-200">{panel.logFile.name}</span>
+      </div>
+      <div className="p-3 text-xs text-gray-500">
+        {panel.logFile.path}
+      </div>
+    </div>
+  );
+}
+
+// 服务器面板网格
+interface ServerPanelGridProps {
+  serverId: string;
+  panels: LogPanelType[];
+  panelOrder: string[];
+  onClose: (panel: LogPanelType) => void;
+  onTerminalReady: (logFileId: string, terminal: Terminal) => void;
+  onReorder: (serverId: string, panelIds: string[]) => void;
+}
+
+function ServerPanelGrid({
+  serverId,
+  panels,
+  panelOrder,
+  onClose,
+  onTerminalReady,
+  onReorder,
+}: ServerPanelGridProps) {
+  const [activeDragId, setActiveDragId] = useState<UniqueIdentifier | null>(null);
+
+  // 配置拖拽传感器
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // 计算每个面板的显示顺序索引
+  const orderIndexMap = useMemo(() => {
+    const order = panelOrder || [];
+    const map = new Map<string, number>();
+
+    // 先处理在 order 中的面板
+    order.forEach((id, index) => {
+      map.set(id, index);
+    });
+
+    // 处理不在 order 中的面板（放到最后）
+    let nextIndex = order.length;
+    panels.forEach(panel => {
+      if (!map.has(panel.id)) {
+        map.set(panel.id, nextIndex++);
+      }
+    });
+
+    return map;
+  }, [panels, panelOrder]);
+
+  // 获取排序后的面板 ID 列表（用于 SortableContext）
+  const sortedPanelIds = useMemo(() => {
+    return [...panels]
+      .sort((a, b) => (orderIndexMap.get(a.id) || 0) - (orderIndexMap.get(b.id) || 0))
+      .map(p => p.id);
+  }, [panels, orderIndexMap]);
+
+  // 拖拽开始
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragId(event.active.id);
+  }, []);
+
+  // 拖拽结束
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDragId(null);
+
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = sortedPanelIds.indexOf(active.id as string);
+    const newIndex = sortedPanelIds.indexOf(over.id as string);
+
+    if (oldIndex !== -1 && newIndex !== -1) {
+      const newPanelIds = arrayMove(sortedPanelIds, oldIndex, newIndex);
+      onReorder(serverId, newPanelIds);
+    }
+  }, [serverId, sortedPanelIds, onReorder]);
+
+  // 获取当前拖拽的面板
+  const activeDragPanel = activeDragId
+    ? panels.find(p => p.id === activeDragId)
+    : null;
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext
+        items={sortedPanelIds}
+        strategy={rectSortingStrategy}
+      >
+        <div
+          className="flex-1 p-2 overflow-auto"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: panels.length === 1
+              ? '1fr'
+              : 'repeat(auto-fit, minmax(400px, 1fr))',
+            gap: '8px',
+            alignContent: 'start',
+          }}
+        >
+          {/* 保持原始数组顺序渲染，通过 CSS order 控制显示顺序 */}
+          {panels.map(panel => (
+            <SortablePanel
+              key={panel.id}
+              panel={panel}
+              panelCount={panels.length}
+              orderIndex={orderIndexMap.get(panel.id) || 0}
+              onClose={onClose}
+              onTerminalReady={onTerminalReady}
+            />
+          ))}
+        </div>
+      </SortableContext>
+
+      {/* 拖拽预览 */}
+      <DragOverlay>
+        {activeDragPanel && (
+          <DragOverlayCard panel={activeDragPanel} />
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
 export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose, onTerminalReady }: LogTabsProps) {
+  const { panelOrder, reorderPanels } = useStore();
+
+  // 使用 ref 保持回调稳定
+  const onCloseRef = useRef(onClose);
+  const onTerminalReadyRef = useRef(onTerminalReady);
+  onCloseRef.current = onClose;
+  onTerminalReadyRef.current = onTerminalReady;
+
+  // 稳定的回调函数
+  const stableOnClose = useCallback((panel: LogPanelType) => {
+    onCloseRef.current(panel);
+  }, []);
+
+  const stableOnTerminalReady = useCallback((logFileId: string, terminal: Terminal) => {
+    onTerminalReadyRef.current(logFileId, terminal);
+  }, []);
 
   // 按服务器分组 panels
-  const serverGroups = panels.reduce((acc, panel) => {
-    const serverId = panel.server.id;
-    if (!acc[serverId]) {
-      acc[serverId] = {
-        server: panel.server,
-        panels: [],
-      };
-    }
-    acc[serverId].panels.push(panel);
-    return acc;
-  }, {} as Record<string, { server: Server; panels: LogPanelType[] }>);
+  const serverGroups = useMemo(() => {
+    return panels.reduce((acc, panel) => {
+      const serverId = panel.server.id;
+      if (!acc[serverId]) {
+        acc[serverId] = {
+          server: panel.server,
+          panels: [],
+        };
+      }
+      acc[serverId].panels.push(panel);
+      return acc;
+    }, {} as Record<string, { server: Server; panels: LogPanelType[] }>);
+  }, [panels]);
 
   const serverIds = Object.keys(serverGroups);
 
@@ -36,38 +369,25 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
     if (serverIds.length === 0) {
       onActiveServerChange(null);
     } else if (!activeServerId || !serverIds.includes(activeServerId)) {
-      // 选择最后一个服务器
       onActiveServerChange(serverIds[serverIds.length - 1]);
     }
   }, [serverIds, activeServerId, onActiveServerChange]);
-
-  const handleClose = useCallback((e: React.MouseEvent, panel: LogPanelType) => {
-    e.stopPropagation();
-    onClose(panel);
-  }, [onClose]);
 
   const handleCloseServer = useCallback((e: React.MouseEvent, serverId: string) => {
     e.stopPropagation();
     const group = serverGroups[serverId];
     if (group) {
-      group.panels.forEach(panel => onClose(panel));
+      group.panels.forEach(panel => onCloseRef.current(panel));
     }
-  }, [serverGroups, onClose]);
-
-  const statusColor = (status: LogPanelType['status']) => ({
-    connecting: 'text-yellow-500',
-    connected: 'text-green-500',
-    disconnected: 'text-gray-500',
-    error: 'text-red-500',
-  }[status]);
+  }, [serverGroups]);
 
   // 获取服务器的整体状态
-  const getServerStatus = (panels: LogPanelType[]) => {
-    if (panels.some(p => p.status === 'error')) return 'error';
-    if (panels.some(p => p.status === 'connecting')) return 'connecting';
-    if (panels.every(p => p.status === 'connected')) return 'connected';
+  const getServerStatus = useCallback((serverPanels: LogPanelType[]) => {
+    if (serverPanels.some(p => p.status === 'error')) return 'error';
+    if (serverPanels.some(p => p.status === 'connecting')) return 'connecting';
+    if (serverPanels.every(p => p.status === 'connected')) return 'connected';
     return 'disconnected';
-  };
+  }, []);
 
   if (panels.length === 0) {
     return (
@@ -100,7 +420,7 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
                   : 'bg-[#252525] text-gray-400 hover:bg-[#2a2a2a]'}
               `}
             >
-              <Circle className={`w-2 h-2 flex-shrink-0 fill-current ${statusColor(serverStatus)}`} />
+              <Circle className={`w-2 h-2 flex-shrink-0 fill-current ${STATUS_COLORS[serverStatus]}`} />
               <ServerIcon className="w-4 h-4 text-blue-400 flex-shrink-0" />
               <span className="text-sm truncate flex-1">{group.server.name}</span>
               <span className="text-xs text-gray-500">({group.panels.length})</span>
@@ -131,61 +451,14 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
                 zIndex: isActive ? 1 : 0,
               }}
             >
-              {/* 日志面板网格 */}
-              <div
-                className="flex-1 p-2 overflow-auto"
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: group.panels.length === 1
-                    ? '1fr'
-                    : 'repeat(auto-fit, minmax(400px, 1fr))',
-                  gap: '8px',
-                  alignContent: 'start',
-                }}
-              >
-                {group.panels.map(panel => (
-                  <div
-                    key={panel.id}
-                    className="bg-[#1a1a1a] rounded border border-gray-700 flex flex-col"
-                    style={{
-                      height: group.panels.length === 1 ? '100%' : '350px',
-                      minHeight: '250px',
-                    }}
-                  >
-                    {/* 日志面板头部 */}
-                    <div className="flex items-center justify-between px-3 py-1.5 bg-[#252525] border-b border-gray-700 rounded-t">
-                      <div className="flex items-center gap-2">
-                        <Circle className={`w-2 h-2 fill-current ${statusColor(panel.status)}`} />
-                        <span className="text-sm text-gray-200">{panel.logFile.name}</span>
-                        <span className="text-xs text-gray-500 truncate max-w-[200px]" title={panel.logFile.path}>
-                          {panel.logFile.path}
-                        </span>
-                      </div>
-                      <button
-                        onClick={(e) => handleClose(e, panel)}
-                        className="p-1 hover:bg-gray-600 rounded transition-colors"
-                        title="关闭此日志"
-                      >
-                        <X className="w-3 h-3 text-gray-400" />
-                      </button>
-                    </div>
-
-                    {/* 错误信息 */}
-                    {panel.status === 'error' && panel.errorMessage && (
-                      <div className="px-3 py-1.5 bg-red-900/30 text-red-400 text-xs">
-                        {panel.errorMessage}
-                      </div>
-                    )}
-
-                    {/* 终端 */}
-                    <div className="flex-1 min-h-0">
-                      <LogTerminal
-                        onReady={(terminal) => onTerminalReady(panel.logFileId, terminal)}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <ServerPanelGrid
+                serverId={serverId}
+                panels={group.panels}
+                panelOrder={panelOrder[serverId] || []}
+                onClose={stableOnClose}
+                onTerminalReady={stableOnTerminalReady}
+                onReorder={reorderPanels}
+              />
             </div>
           );
         })}

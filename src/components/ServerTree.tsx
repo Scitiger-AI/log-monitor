@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronRight, ChevronDown, Server as ServerIcon, FileText, Plus, Trash2, Pencil } from 'lucide-react';
+import { ChevronRight, ChevronDown, Server as ServerIcon, FileText, Plus, Trash2, Pencil, FolderPlus } from 'lucide-react';
 import { Server, LogFile, useStore } from '@/store';
 
 interface ServerTreeProps {
@@ -9,6 +9,7 @@ interface ServerTreeProps {
   onAddServer: () => void;
   onEditServer: (server: Server) => void;
   onAddLogFile: (serverId: string) => void;
+  onBatchAddLogFiles: (serverId: string) => void;
   onDeleteServer: (serverId: string) => void;
   onDeleteLogFile: (logFileId: string) => void;
 }
@@ -18,6 +19,7 @@ export function ServerTree({
   onAddServer,
   onEditServer,
   onAddLogFile,
+  onBatchAddLogFiles,
   onDeleteServer,
   onDeleteLogFile,
 }: ServerTreeProps) {
@@ -83,6 +85,13 @@ export function ServerTree({
                       title="添加日志文件"
                     >
                       <Plus className="w-3 h-3 text-gray-400" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onBatchAddLogFiles(server.id); }}
+                      className="p-0.5 hover:bg-gray-600 rounded"
+                      title="批量添加日志文件"
+                    >
+                      <FolderPlus className="w-3 h-3 text-gray-400" />
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); onEditServer(server); }}

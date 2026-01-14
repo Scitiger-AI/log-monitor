@@ -145,6 +145,14 @@ class WSManager {
   }
 
   close() {
+    // 主动关闭所有 WebSocket 客户端连接
+    for (const [ws] of this.clientSubscriptions) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, 'Server shutting down');
+      }
+    }
+    this.clientSubscriptions.clear();
+
     if (this.wss) {
       this.wss.close();
     }

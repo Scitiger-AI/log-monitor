@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, memo } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -9,7 +9,7 @@ interface LogTerminalProps {
   onReady?: (terminal: Terminal) => void;
 }
 
-export function LogTerminal({ onReady }: LogTerminalProps) {
+export const LogTerminal = memo(function LogTerminal({ onReady }: LogTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -83,4 +83,4 @@ export function LogTerminal({ onReady }: LogTerminalProps) {
   }, []);
 
   return <div ref={containerRef} className="w-full h-full" />;
-}
+});

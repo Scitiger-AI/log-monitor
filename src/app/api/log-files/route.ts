@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { getAllLogFiles, getLogFilesByServerId, createLogFile, getLogFileById, updateLogFile, deleteLogFile, getServerById } from '@/lib/db';
+import { getAllLogFiles, getLogFilesByServerId, createLogFile, getLogFileById, updateLogFile, deleteLogFile, getServerById, getLogFileByServerAndPath } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,6 +26,15 @@ export async function POST(request: NextRequest) {
     const server = getServerById(serverId);
     if (!server) {
       return NextResponse.json({ success: false, error: 'Server not found' }, { status: 404 });
+    }
+
+    // 检查该服务器是否已存在相同路径的日志文件
+    const existingLogFile = getLogFileByServerAndPath(serverId, path);
+    if (existingLogFile) {
+      return NextResponse.json(
+        { success: false, error: `日志文件已存在: ${path}` },
+        { status: 409 }
+      );
     }
 
     const logFile = createLogFile({

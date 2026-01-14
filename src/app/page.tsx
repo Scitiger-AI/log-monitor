@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { v4 as uuidv4 } from 'uuid';
 import { ServerTree } from '@/components/ServerTree';
 import { LogTabs } from '@/components/LogTabs';
-import { ServerForm, LogFileForm } from '@/components/Forms';
+import { ServerForm, LogFileForm, BatchLogFileForm } from '@/components/Forms';
 import { useStore, Server, LogFile, LogPanel as LogPanelType } from '@/store';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
@@ -14,6 +14,7 @@ export default function Home() {
   const [showServerForm, setShowServerForm] = useState(false);
   const [editingServer, setEditingServer] = useState<Server | null>(null);
   const [showLogFileForm, setShowLogFileForm] = useState<string | null>(null);
+  const [showBatchLogFileForm, setShowBatchLogFileForm] = useState<string | null>(null);
   const [activeServerId, setActiveServerId] = useState<string | null>(null);
   const terminalsRef = useRef<Map<string, Terminal>>(new Map());
 
@@ -176,7 +177,34 @@ export default function Home() {
     }
   };
 
+  const handleBatchAddLogFiles = async (data: { files: { name: string; path: string }[]; tailLines: number }) => {
+    if (!showBatchLogFileForm) return;
+
+    try {
+      const res = await fetch('/api/log-files/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serverId: showBatchLogFileForm,
+          files: data.files,
+          tailLines: data.tailLines,
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        fetchLogFiles();
+        setShowBatchLogFileForm(null);
+        alert(result.message || `成功添加 ${data.files.length} 个日志文件`);
+      } else {
+        alert(result.error);
+      }
+    } catch {
+      alert('批量添加日志文件失败');
+    }
+  };
+
   const selectedServer = showLogFileForm ? servers.find(s => s.id === showLogFileForm) : null;
+  const batchSelectedServer = showBatchLogFileForm ? servers.find(s => s.id === showBatchLogFileForm) : null;
 
   return (
     <div className="h-screen flex flex-col">
@@ -195,6 +223,7 @@ export default function Home() {
             onAddServer={() => setShowServerForm(true)}
             onEditServer={(server) => setEditingServer(server)}
             onAddLogFile={(serverId) => setShowLogFileForm(serverId)}
+            onBatchAddLogFiles={(serverId) => setShowBatchLogFileForm(serverId)}
             onDeleteServer={handleDeleteServer}
             onDeleteLogFile={handleDeleteLogFile}
           />
@@ -241,6 +270,15 @@ export default function Home() {
           serverName={selectedServer.name}
           onSubmit={handleAddLogFile}
           onCancel={() => setShowLogFileForm(null)}
+        />
+      )}
+
+      {showBatchLogFileForm && batchSelectedServer && (
+        <BatchLogFileForm
+          serverId={showBatchLogFileForm}
+          serverName={batchSelectedServer.name}
+          onSubmit={handleBatchAddLogFiles}
+          onCancel={() => setShowBatchLogFileForm(null)}
         />
       )}
     </div>
