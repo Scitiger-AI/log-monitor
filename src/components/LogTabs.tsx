@@ -300,7 +300,7 @@ function ServerPanelGrid({
             display: 'grid',
             gridTemplateColumns: panels.length === 1
               ? '1fr'
-              : 'repeat(auto-fit, minmax(400px, 1fr))',
+              : 'repeat(2, 1fr)',
             gap: '8px',
             alignContent: 'start',
           }}

@@ -35,7 +35,26 @@ export function ServerForm({ server, onSubmit, onCancel }: ServerFormProps) {
   const [host, setHost] = useState(server?.host ?? '');
   const [port, setPort] = useState(server?.port ?? 22);
   const [username, setUsername] = useState(server?.username ?? '');
-  const [privateKeyPath, setPrivateKeyPath] = useState(server?.privateKeyPath ?? '~/.ssh/id_rsa');
+  const [privateKeyPath, setPrivateKeyPath] = useState(server?.privateKeyPath ?? '');
+  const [detectedKeyPath, setDetectedKeyPath] = useState('~/.ssh/id_rsa'); // 用于 placeholder
+
+  // 自动检测 SSH 密钥路径（仅在新增模式下）
+  useEffect(() => {
+    if (!isEditMode) {
+      fetch('/api/ssh-keys')
+        .then(res => res.json())
+        .then(data => {
+          if (data.defaultKey) {
+            setDetectedKeyPath(data.defaultKey);
+            // 仅在用户未手动输入时设置默认值
+            setPrivateKeyPath(prev => prev === '' ? data.defaultKey : prev);
+          }
+        })
+        .catch(err => {
+          console.error('Failed to detect SSH keys:', err);
+        });
+    }
+  }, [isEditMode]);
 
   // 当 server 变化时更新表单
   useEffect(() => {
@@ -132,7 +151,7 @@ export function ServerForm({ server, onSubmit, onCancel }: ServerFormProps) {
                   type="text"
                   value={privateKeyPath}
                   onChange={(e) => setPrivateKeyPath(e.target.value)}
-                  placeholder="~/.ssh/id_rsa"
+                  placeholder={detectedKeyPath}
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm focus:outline-none focus:border-blue-500"
                 />
               </div>
