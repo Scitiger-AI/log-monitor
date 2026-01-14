@@ -120,16 +120,16 @@ export function ServerTree({
                       serverLogFiles.map(logFile => (
                         <div
                           key={logFile.id}
-                          className="flex items-center gap-2 px-4 py-1.5 hover:bg-gray-800 cursor-pointer group"
+                          className="flex items-start gap-2 px-4 py-1.5 hover:bg-gray-800 cursor-pointer group"
                           onDoubleClick={() => onLogFileClick(logFile, server)}
                         >
-                          <FileText className="w-4 h-4 text-green-400" />
-                          <span className="flex-1 text-sm text-gray-400 truncate" title={logFile.path}>
+                          <FileText className="w-4 h-4 text-green-400 flex-shrink-0 mt-0.5" />
+                          <span className="flex-1 text-sm text-gray-400 break-all" title={logFile.path}>
                             {logFile.name}
                           </span>
                           <button
                             onClick={(e) => { e.stopPropagation(); onDeleteLogFile(logFile.id); }}
-                            className="hidden group-hover:block p-0.5 hover:bg-gray-600 rounded"
+                            className="hidden group-hover:block p-0.5 hover:bg-gray-600 rounded flex-shrink-0 mt-0.5"
                             title="删除日志文件"
                           >
                             <Trash2 className="w-3 h-3 text-red-400" />
