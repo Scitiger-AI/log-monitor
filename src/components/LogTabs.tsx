@@ -95,6 +95,7 @@ interface SortablePanelProps {
   orderIndex: number;
   onClose: (panel: LogPanelType) => void;
   onTerminalReady: (logFileId: string, terminal: Terminal) => void;
+  hidden?: boolean; // 是否隐藏
 }
 
 const SortablePanel = memo(function SortablePanel({
@@ -103,6 +104,7 @@ const SortablePanel = memo(function SortablePanel({
   orderIndex,
   onClose,
   onTerminalReady,
+  hidden = false,
 }: SortablePanelProps) {
   const {
     attributes,
@@ -119,7 +121,8 @@ const SortablePanel = memo(function SortablePanel({
     height: panelCount === 1 ? '100%' : '350px',
     minHeight: '250px',
     order: orderIndex, // 使用 CSS order 控制显示顺序
-  }), [transform, transition, panelCount, orderIndex]);
+    display: hidden ? 'none' : 'flex', // 使用 display 控制显示/隐藏
+  }), [transform, transition, panelCount, orderIndex, hidden]);
 
   const handleClose = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -130,7 +133,7 @@ const SortablePanel = memo(function SortablePanel({
     <div
       ref={setNodeRef}
       style={style}
-      className={`bg-[#1a1a1a] rounded border flex flex-col ${
+      className={`bg-[#1a1a1a] rounded border flex-col ${
         isDragging ? 'border-blue-500 shadow-lg shadow-blue-500/20 opacity-50 z-50' : 'border-gray-700'
       }`}
     >
@@ -175,7 +178,8 @@ const SortablePanel = memo(function SortablePanel({
     prev.panelCount === next.panelCount &&
     prev.orderIndex === next.orderIndex &&
     prev.onClose === next.onClose &&
-    prev.onTerminalReady === next.onTerminalReady
+    prev.onTerminalReady === next.onTerminalReady &&
+    prev.hidden === next.hidden
   );
 });
 
@@ -202,6 +206,7 @@ function DragOverlayCard({ panel }: { panel: LogPanelType }) {
 interface ServerPanelGridProps {
   serverId: string;
   panels: LogPanelType[];
+  visiblePanelIds: Set<string>; // 当前分组可见的面板 ID
   panelOrder: string[];
   onClose: (panel: LogPanelType) => void;
   onTerminalReady: (logFileId: string, terminal: Terminal) => void;
@@ -211,6 +216,7 @@ interface ServerPanelGridProps {
 function ServerPanelGrid({
   serverId,
   panels,
+  visiblePanelIds,
   panelOrder,
   onClose,
   onTerminalReady,
@@ -230,33 +236,42 @@ function ServerPanelGrid({
     })
   );
 
-  // 计算每个面板的显示顺序索引
+  // 计算每个面板的显示顺序索引（只针对可见面板）
   const orderIndexMap = useMemo(() => {
     const order = panelOrder || [];
     const map = new Map<string, number>();
 
+    // 只对可见面板计算顺序
+    const visiblePanels = panels.filter(p => visiblePanelIds.has(p.id));
+
     // 先处理在 order 中的面板
-    order.forEach((id, index) => {
-      map.set(id, index);
+    let index = 0;
+    order.forEach((id) => {
+      if (visiblePanelIds.has(id)) {
+        map.set(id, index++);
+      }
     });
 
-    // 处理不在 order 中的面板（放到最后）
-    let nextIndex = order.length;
-    panels.forEach(panel => {
+    // 处理不在 order 中的可见面板（放到最后）
+    visiblePanels.forEach(panel => {
       if (!map.has(panel.id)) {
-        map.set(panel.id, nextIndex++);
+        map.set(panel.id, index++);
       }
     });
 
     return map;
-  }, [panels, panelOrder]);
+  }, [panels, panelOrder, visiblePanelIds]);
 
-  // 获取排序后的面板 ID 列表（用于 SortableContext）
-  const sortedPanelIds = useMemo(() => {
-    return [...panels]
+  // 获取排序后的可见面板 ID 列表（用于 SortableContext）
+  const sortedVisiblePanelIds = useMemo(() => {
+    return panels
+      .filter(p => visiblePanelIds.has(p.id))
       .sort((a, b) => (orderIndexMap.get(a.id) || 0) - (orderIndexMap.get(b.id) || 0))
       .map(p => p.id);
-  }, [panels, orderIndexMap]);
+  }, [panels, visiblePanelIds, orderIndexMap]);
+
+  // 可见面板数量
+  const visiblePanelCount = visiblePanelIds.size;
 
   // 拖拽开始
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -270,21 +285,21 @@ function ServerPanelGrid({
 
     if (!over || active.id === over.id) return;
 
-    const oldIndex = sortedPanelIds.indexOf(active.id as string);
-    const newIndex = sortedPanelIds.indexOf(over.id as string);
+    const oldIndex = sortedVisiblePanelIds.indexOf(active.id as string);
+    const newIndex = sortedVisiblePanelIds.indexOf(over.id as string);
 
     if (oldIndex !== -1 && newIndex !== -1) {
-      const newPanelIds = arrayMove(sortedPanelIds, oldIndex, newIndex);
+      const newPanelIds = arrayMove(sortedVisiblePanelIds, oldIndex, newIndex);
       onReorder(serverId, newPanelIds);
     }
-  }, [serverId, sortedPanelIds, onReorder]);
+  }, [serverId, sortedVisiblePanelIds, onReorder]);
 
   // 获取当前拖拽的面板
   const activeDragPanel = activeDragId
     ? panels.find(p => p.id === activeDragId)
     : null;
 
-  if (panels.length === 0) {
+  if (visiblePanelCount === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-500">
         <p className="text-sm">当前分组没有打开的日志</p>
@@ -300,31 +315,35 @@ function ServerPanelGrid({
       onDragEnd={handleDragEnd}
     >
       <SortableContext
-        items={sortedPanelIds}
+        items={sortedVisiblePanelIds}
         strategy={rectSortingStrategy}
       >
         <div
           className="flex-1 p-2 overflow-auto"
           style={{
             display: 'grid',
-            gridTemplateColumns: panels.length === 1
+            gridTemplateColumns: visiblePanelCount === 1
               ? '1fr'
               : 'repeat(2, 1fr)',
             gap: '8px',
             alignContent: 'start',
           }}
         >
-          {/* 保持原始数组顺序渲染，通过 CSS order 控制显示顺序 */}
-          {panels.map(panel => (
-            <SortablePanel
-              key={panel.id}
-              panel={panel}
-              panelCount={panels.length}
-              orderIndex={orderIndexMap.get(panel.id) || 0}
-              onClose={onClose}
-              onTerminalReady={onTerminalReady}
-            />
-          ))}
+          {/* 渲染所有面板，使用 CSS 控制显示/隐藏 */}
+          {panels.map(panel => {
+            const isVisible = visiblePanelIds.has(panel.id);
+            return (
+              <SortablePanel
+                key={panel.id}
+                panel={panel}
+                panelCount={visiblePanelCount}
+                orderIndex={orderIndexMap.get(panel.id) || 0}
+                onClose={onClose}
+                onTerminalReady={onTerminalReady}
+                hidden={!isVisible}
+              />
+            );
+          })}
         </div>
       </SortableContext>
 
@@ -371,19 +390,24 @@ function ServerContent({
   onRenameGroup,
   onDeleteGroup,
 }: ServerContentProps) {
-  // 根据当前激活的分组过滤面板
+  // 计算当前分组可见的面板 ID 集合
   // 使用 store 中最新的 logFiles 数据来获取 groupId，而不是 panel 中的快照
-  const filteredPanels = useMemo(() => {
-    if (activeGroupId === null) {
-      // 显示所有面板（全部）
-      return panels;
-    }
-    // 显示指定分组的面板，使用最新的 logFiles 数据
-    return panels.filter(p => {
-      const latestLogFile = logFiles.find(lf => lf.id === p.logFileId);
-      const currentGroupId = latestLogFile?.groupId ?? p.logFile.groupId;
-      return currentGroupId === activeGroupId;
+  const visiblePanelIds = useMemo(() => {
+    const ids = new Set<string>();
+    panels.forEach(p => {
+      if (activeGroupId === null) {
+        // "全部"视图，显示所有面板
+        ids.add(p.id);
+      } else {
+        // 显示指定分组的面板，使用最新的 logFiles 数据
+        const latestLogFile = logFiles.find(lf => lf.id === p.logFileId);
+        const currentGroupId = latestLogFile?.groupId ?? p.logFile.groupId;
+        if (currentGroupId === activeGroupId) {
+          ids.add(p.id);
+        }
+      }
     });
+    return ids;
   }, [panels, activeGroupId, logFiles]);
 
   // 计算未分组的日志数量（用于"全部"Tab显示）
@@ -405,7 +429,8 @@ function ServerContent({
       {/* 面板网格 */}
       <ServerPanelGrid
         serverId={serverId}
-        panels={filteredPanels}
+        panels={panels}
+        visiblePanelIds={visiblePanelIds}
         panelOrder={panelOrder}
         onClose={onClose}
         onTerminalReady={onTerminalReady}

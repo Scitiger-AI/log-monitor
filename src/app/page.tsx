@@ -36,9 +36,9 @@ export default function Home() {
     // 获取当前服务器激活的分组
     const currentGroupId = activeGroupId[server.id] ?? null;
 
-    // 如果日志文件的分组与当前激活分组不同，需要移动日志文件到当前分组
+    // 只有当日志文件未分组（groupId 为 null）且当前有激活分组时，才自动移动到当前分组
     let updatedLogFile = logFile;
-    if (currentGroupId !== null && logFile.groupId !== currentGroupId) {
+    if (logFile.groupId === null && currentGroupId !== null) {
       try {
         const res = await fetch('/api/log-files/group', {
           method: 'PUT',
@@ -59,8 +59,12 @@ export default function Home() {
 
     const existingPanel = panels.find(p => p.logFileId === logFile.id);
     if (existingPanel) {
-      // 如果已存在，切换到对应服务器的 Tab
+      // 如果已存在，切换到对应服务器的 Tab，并切换到该日志文件所属的分组
       setActiveServerId(server.id);
+      // 切换到日志文件所属的分组（如果有的话）
+      if (logFile.groupId !== null) {
+        setActiveGroupId(server.id, logFile.groupId);
+      }
       return;
     }
 
@@ -75,8 +79,12 @@ export default function Home() {
     addPanel(panel);
     // 自动切换到该服务器的 Tab
     setActiveServerId(server.id);
+    // 如果日志文件有分组，切换到该分组
+    if (updatedLogFile.groupId !== null) {
+      setActiveGroupId(server.id, updatedLogFile.groupId);
+    }
     setTimeout(() => subscribe([logFile.id]), 100);
-  }, [panels, addPanel, subscribe, activeGroupId, fetchLogFiles]);
+  }, [panels, addPanel, subscribe, activeGroupId, fetchLogFiles, setActiveGroupId]);
 
   const handleClosePanel = useCallback((panel: LogPanelType) => {
     unsubscribe([panel.logFileId]);
