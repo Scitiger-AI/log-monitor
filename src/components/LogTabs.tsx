@@ -27,7 +27,7 @@ import type { DraggableAttributes } from '@dnd-kit/core';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { LogTerminal } from './LogTerminal';
 import { GroupTabBar } from './GroupTabBar';
-import { LogPanel as LogPanelType, Server, LogGroup, useStore } from '@/store';
+import { LogPanel as LogPanelType, Server, LogGroup, LogFile, useStore } from '@/store';
 
 interface LogTabsProps {
   panels: LogPanelType[];
@@ -346,6 +346,7 @@ interface ServerContentProps {
   groups: LogGroup[];
   activeGroupId: string | null;
   panelOrder: string[];
+  logFiles: LogFile[]; // 添加最新的 logFiles 数据
   onClose: (panel: LogPanelType) => void;
   onTerminalReady: (logFileId: string, terminal: Terminal) => void;
   onReorder: (serverId: string, panelIds: string[]) => void;
@@ -361,6 +362,7 @@ function ServerContent({
   groups,
   activeGroupId,
   panelOrder,
+  logFiles,
   onClose,
   onTerminalReady,
   onReorder,
@@ -370,14 +372,19 @@ function ServerContent({
   onDeleteGroup,
 }: ServerContentProps) {
   // 根据当前激活的分组过滤面板
+  // 使用 store 中最新的 logFiles 数据来获取 groupId，而不是 panel 中的快照
   const filteredPanels = useMemo(() => {
     if (activeGroupId === null) {
       // 显示所有面板（全部）
       return panels;
     }
-    // 显示指定分组的面板
-    return panels.filter(p => p.logFile.groupId === activeGroupId);
-  }, [panels, activeGroupId]);
+    // 显示指定分组的面板，使用最新的 logFiles 数据
+    return panels.filter(p => {
+      const latestLogFile = logFiles.find(lf => lf.id === p.logFileId);
+      const currentGroupId = latestLogFile?.groupId ?? p.logFile.groupId;
+      return currentGroupId === activeGroupId;
+    });
+  }, [panels, activeGroupId, logFiles]);
 
   // 计算未分组的日志数量（用于"全部"Tab显示）
   const totalCount = panels.length;
@@ -413,6 +420,7 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
     panelOrder,
     reorderPanels,
     logGroups,
+    logFiles,
     activeGroupId,
     setActiveGroupId,
     addLogGroup,
@@ -606,6 +614,7 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
                 groups={serverLogGroups}
                 activeGroupId={currentActiveGroupId}
                 panelOrder={panelOrder[serverId] || []}
+                logFiles={logFiles}
                 onClose={stableOnClose}
                 onTerminalReady={stableOnTerminalReady}
                 onReorder={reorderPanels}
