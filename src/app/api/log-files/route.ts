@@ -1,13 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { getAllLogFiles, getLogFilesByServerId, createLogFile, getLogFileById, updateLogFile, deleteLogFile, getServerById, getLogFileByServerAndPath } from '@/lib/db';
+import { getAllLogFiles, getLogFilesByServerId, createLogFile, getLogFileById, updateLogFile, deleteLogFile, getServerById, getLogFileByServerAndPath, getLogFilesByGroupId, getUngroupedLogFiles } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const serverId = searchParams.get('serverId');
+    const groupId = searchParams.get('groupId');
+    const ungrouped = searchParams.get('ungrouped');
 
-    const logFiles = serverId ? getLogFilesByServerId(serverId) : getAllLogFiles();
+    let logFiles;
+    if (groupId) {
+      // 获取指定分组的日志文件
+      logFiles = getLogFilesByGroupId(groupId);
+    } else if (ungrouped && serverId) {
+      // 获取指定服务器的未分组日志文件
+      logFiles = getUngroupedLogFiles(serverId);
+    } else if (serverId) {
+      // 获取指定服务器的所有日志文件
+      logFiles = getLogFilesByServerId(serverId);
+    } else {
+      // 获取所有日志文件
+      logFiles = getAllLogFiles();
+    }
+
     return NextResponse.json({ success: true, data: logFiles });
   } catch (error) {
     return NextResponse.json({ success: false, error: (error as Error).message }, { status: 500 });
@@ -17,7 +33,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { serverId, name, path, tailLines = 100 } = body;
+    const { serverId, name, path, tailLines = 100, groupId = null } = body;
 
     if (!serverId || !name || !path) {
       return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
@@ -40,6 +56,7 @@ export async function POST(request: NextRequest) {
     const logFile = createLogFile({
       id: uuidv4(),
       serverId,
+      groupId,
       name,
       path,
       tailLines,

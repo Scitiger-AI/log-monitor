@@ -10,10 +10,20 @@ export interface Server {
   createdAt: string;
 }
 
+// 日志分组
+export interface LogGroup {
+  id: string;
+  serverId: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+}
+
 // 日志文件配置
 export interface LogFile {
   id: string;
   serverId: string;
+  groupId: string | null;  // 所属分组，null 表示未分组
   name: string;
   path: string;
   tailLines: number;

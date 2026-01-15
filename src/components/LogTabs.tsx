@@ -26,7 +26,8 @@ import { CSS } from '@dnd-kit/utilities';
 import type { DraggableAttributes } from '@dnd-kit/core';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { LogTerminal } from './LogTerminal';
-import { LogPanel as LogPanelType, Server, useStore } from '@/store';
+import { GroupTabBar } from './GroupTabBar';
+import { LogPanel as LogPanelType, Server, LogGroup, useStore } from '@/store';
 
 interface LogTabsProps {
   panels: LogPanelType[];
@@ -283,6 +284,14 @@ function ServerPanelGrid({
     ? panels.find(p => p.id === activeDragId)
     : null;
 
+  if (panels.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-500">
+        <p className="text-sm">当前分组没有打开的日志</p>
+      </div>
+    );
+  }
+
   return (
     <DndContext
       sensors={sensors}
@@ -329,8 +338,93 @@ function ServerPanelGrid({
   );
 }
 
+// 服务器内容区域（包含分组 Tab 和面板网格）
+interface ServerContentProps {
+  serverId: string;
+  server: Server;
+  panels: LogPanelType[];
+  groups: LogGroup[];
+  activeGroupId: string | null;
+  panelOrder: string[];
+  onClose: (panel: LogPanelType) => void;
+  onTerminalReady: (logFileId: string, terminal: Terminal) => void;
+  onReorder: (serverId: string, panelIds: string[]) => void;
+  onGroupChange: (groupId: string | null) => void;
+  onAddGroup: () => void;
+  onRenameGroup: (groupId: string, newName: string) => void;
+  onDeleteGroup: (groupId: string) => void;
+}
+
+function ServerContent({
+  serverId,
+  panels,
+  groups,
+  activeGroupId,
+  panelOrder,
+  onClose,
+  onTerminalReady,
+  onReorder,
+  onGroupChange,
+  onAddGroup,
+  onRenameGroup,
+  onDeleteGroup,
+}: ServerContentProps) {
+  // 根据当前激活的分组过滤面板
+  const filteredPanels = useMemo(() => {
+    if (activeGroupId === null) {
+      // 显示所有面板（全部）
+      return panels;
+    }
+    // 显示指定分组的面板
+    return panels.filter(p => p.logFile.groupId === activeGroupId);
+  }, [panels, activeGroupId]);
+
+  // 计算未分组的日志数量（用于"全部"Tab显示）
+  const totalCount = panels.length;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* 分组 Tab 栏 */}
+      <GroupTabBar
+        groups={groups}
+        activeGroupId={activeGroupId}
+        onGroupChange={onGroupChange}
+        onAddGroup={onAddGroup}
+        onRenameGroup={onRenameGroup}
+        onDeleteGroup={onDeleteGroup}
+        ungroupedCount={totalCount}
+      />
+
+      {/* 面板网格 */}
+      <ServerPanelGrid
+        serverId={serverId}
+        panels={filteredPanels}
+        panelOrder={panelOrder}
+        onClose={onClose}
+        onTerminalReady={onTerminalReady}
+        onReorder={onReorder}
+      />
+    </div>
+  );
+}
+
 export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose, onTerminalReady }: LogTabsProps) {
-  const { panelOrder, reorderPanels } = useStore();
+  const {
+    panelOrder,
+    reorderPanels,
+    logGroups,
+    activeGroupId,
+    setActiveGroupId,
+    addLogGroup,
+    updateLogGroup,
+    removeLogGroup,
+    fetchLogGroups,
+  } = useStore();
+
+  // 初始化时获取分组数据
+  useEffect(() => {
+    fetchLogGroups();
+  }, [fetchLogGroups]);
 
   // 使用 ref 保持回调稳定
   const onCloseRef = useRef(onClose);
@@ -389,6 +483,58 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
     return 'disconnected';
   }, []);
 
+  // 分组操作回调
+  const handleAddGroup = useCallback(async (serverId: string) => {
+    try {
+      const res = await fetch('/api/log-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serverId,
+          name: '新分组',
+          sortOrder: logGroups.filter(g => g.serverId === serverId).length,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addLogGroup(data.data);
+        setActiveGroupId(serverId, data.data.id);
+      }
+    } catch (error) {
+      console.error('Failed to create group:', error);
+    }
+  }, [logGroups, addLogGroup, setActiveGroupId]);
+
+  const handleRenameGroup = useCallback(async (groupId: string, newName: string) => {
+    try {
+      const res = await fetch('/api/log-groups', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: groupId, name: newName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        updateLogGroup(groupId, { name: newName });
+      }
+    } catch (error) {
+      console.error('Failed to rename group:', error);
+    }
+  }, [updateLogGroup]);
+
+  const handleDeleteGroup = useCallback(async (groupId: string) => {
+    try {
+      const res = await fetch(`/api/log-groups?id=${groupId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        removeLogGroup(groupId);
+      }
+    } catch (error) {
+      console.error('Failed to delete group:', error);
+    }
+  }, [removeLogGroup]);
+
   if (panels.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-gray-500">
@@ -436,11 +582,13 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
         })}
       </div>
 
-      {/* Tab Content - 服务器内的日志面板 */}
+      {/* Tab Content - 服务器内的分组和日志面板 */}
       <div className="flex-1 min-h-0 relative">
         {serverIds.map(serverId => {
           const group = serverGroups[serverId];
           const isActive = serverId === activeServerId;
+          const serverLogGroups = logGroups.filter(g => g.serverId === serverId);
+          const currentActiveGroupId = activeGroupId[serverId] ?? null;
 
           return (
             <div
@@ -451,13 +599,20 @@ export function LogTabs({ panels, activeServerId, onActiveServerChange, onClose,
                 zIndex: isActive ? 1 : 0,
               }}
             >
-              <ServerPanelGrid
+              <ServerContent
                 serverId={serverId}
+                server={group.server}
                 panels={group.panels}
+                groups={serverLogGroups}
+                activeGroupId={currentActiveGroupId}
                 panelOrder={panelOrder[serverId] || []}
                 onClose={stableOnClose}
                 onTerminalReady={stableOnTerminalReady}
                 onReorder={reorderPanels}
+                onGroupChange={(groupId) => setActiveGroupId(serverId, groupId)}
+                onAddGroup={() => handleAddGroup(serverId)}
+                onRenameGroup={handleRenameGroup}
+                onDeleteGroup={handleDeleteGroup}
               />
             </div>
           );

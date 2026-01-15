@@ -10,7 +10,7 @@ import { useStore, Server, LogFile, LogPanel as LogPanelType } from '@/store';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
 export default function Home() {
-  const { servers, panels, fetchServers, fetchLogFiles, addPanel, removePanel } = useStore();
+  const { servers, panels, fetchServers, fetchLogFiles, addPanel, removePanel, setActiveGroupId, activeGroupId } = useStore();
   const [showServerForm, setShowServerForm] = useState(false);
   const [editingServer, setEditingServer] = useState<Server | null>(null);
   const [showLogFileForm, setShowLogFileForm] = useState<string | null>(null);
@@ -32,18 +32,42 @@ export default function Home() {
     fetchLogFiles();
   }, [fetchServers, fetchLogFiles]);
 
-  const handleLogFileClick = useCallback((logFile: LogFile, server: Server) => {
+  const handleLogFileClick = useCallback(async (logFile: LogFile, server: Server) => {
+    // 获取当前服务器激活的分组
+    const currentGroupId = activeGroupId[server.id] ?? null;
+
+    // 如果日志文件的分组与当前激活分组不同，需要移动日志文件到当前分组
+    let updatedLogFile = logFile;
+    if (currentGroupId !== null && logFile.groupId !== currentGroupId) {
+      try {
+        const res = await fetch('/api/log-files/group', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ logFileId: logFile.id, groupId: currentGroupId }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          // 更新本地 logFile 的 groupId
+          updatedLogFile = { ...logFile, groupId: currentGroupId };
+          // 刷新日志文件列表
+          fetchLogFiles();
+        }
+      } catch (error) {
+        console.error('Failed to move log file to group:', error);
+      }
+    }
+
     const existingPanel = panels.find(p => p.logFileId === logFile.id);
     if (existingPanel) {
-      // 如果已存在，只切换到对应服务器的 Tab
+      // 如果已存在，切换到对应服务器的 Tab
       setActiveServerId(server.id);
       return;
     }
 
     const panel: LogPanelType = {
       id: uuidv4(),
-      logFileId: logFile.id,
-      logFile,
+      logFileId: updatedLogFile.id,
+      logFile: updatedLogFile,
       server,
       status: 'connecting',
     };
@@ -52,7 +76,7 @@ export default function Home() {
     // 自动切换到该服务器的 Tab
     setActiveServerId(server.id);
     setTimeout(() => subscribe([logFile.id]), 100);
-  }, [panels, addPanel, subscribe]);
+  }, [panels, addPanel, subscribe, activeGroupId, fetchLogFiles]);
 
   const handleClosePanel = useCallback((panel: LogPanelType) => {
     unsubscribe([panel.logFileId]);

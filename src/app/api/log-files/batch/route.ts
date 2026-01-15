@@ -7,7 +7,7 @@ import { createLogFiles, getServerById, getExistingLogFilePaths } from '@/lib/db
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { serverId, files, tailLines = 100 } = body;
+    const { serverId, files, tailLines = 100, groupId = null } = body;
 
     // 验证必填字段
     if (!serverId) {
@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
     const logFilesToCreate = newFiles.map((file: { name?: string; path: string }) => ({
       id: uuidv4(),
       serverId,
+      groupId,
       name: file.name || file.path.split('/').pop() || file.path, // 默认使用文件名
       path: file.path,
       tailLines,

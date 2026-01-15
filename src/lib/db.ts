@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import { Server, LogFile } from './types';
+import { Server, LogFile, LogGroup } from './types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'log-monitor.db');
@@ -36,16 +36,30 @@ function initTables() {
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS log_groups (
+      id TEXT PRIMARY KEY,
+      serverId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      sortOrder INTEGER DEFAULT 0,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (serverId) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS log_files (
       id TEXT PRIMARY KEY,
       serverId TEXT NOT NULL,
+      groupId TEXT,
       name TEXT NOT NULL,
       path TEXT NOT NULL,
       tailLines INTEGER DEFAULT 100,
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (serverId) REFERENCES servers(id) ON DELETE CASCADE
+      FOREIGN KEY (serverId) REFERENCES servers(id) ON DELETE CASCADE,
+      FOREIGN KEY (groupId) REFERENCES log_groups(id) ON DELETE SET NULL
     );
   `);
+
+  // 迁移：为已存在的 log_files 表添加 groupId 列（如果不存在）
+  migrateLogFilesTable(database);
 
   // 清理重复记录后再创建唯一索引
   cleanupDuplicatesBeforeIndex(database);
@@ -53,7 +67,22 @@ function initTables() {
   // 为已存在的表添加唯一索引（如果不存在）
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_log_files_server_path ON log_files(serverId, path);
+    CREATE INDEX IF NOT EXISTS idx_log_groups_server ON log_groups(serverId);
+    CREATE INDEX IF NOT EXISTS idx_log_files_group ON log_files(groupId);
   `);
+}
+
+// 迁移：为已存在的 log_files 表添加 groupId 列
+function migrateLogFilesTable(database: Database.Database) {
+  // 检查 groupId 列是否已存在
+  const tableInfo = database.prepare("PRAGMA table_info(log_files)").all() as { name: string }[];
+  const hasGroupId = tableInfo.some(col => col.name === 'groupId');
+
+  if (!hasGroupId) {
+    console.log('[DB] 迁移：为 log_files 表添加 groupId 列...');
+    database.exec('ALTER TABLE log_files ADD COLUMN groupId TEXT REFERENCES log_groups(id) ON DELETE SET NULL');
+    console.log('[DB] 迁移完成');
+  }
 }
 
 // 在创建唯一索引前清理重复记录
@@ -172,10 +201,10 @@ export function getExistingLogFilePaths(serverId: string, paths: string[]): Set<
 
 export function createLogFile(logFile: Omit<LogFile, 'createdAt'>): LogFile {
   const stmt = getDb().prepare(`
-    INSERT INTO log_files (id, serverId, name, path, tailLines)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO log_files (id, serverId, groupId, name, path, tailLines)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(logFile.id, logFile.serverId, logFile.name, logFile.path, logFile.tailLines);
+  stmt.run(logFile.id, logFile.serverId, logFile.groupId, logFile.name, logFile.path, logFile.tailLines);
   return getLogFileById(logFile.id)!;
 }
 
@@ -199,13 +228,13 @@ export function deleteLogFile(id: string): boolean {
 export function createLogFiles(logFiles: Omit<LogFile, 'createdAt'>[]): LogFile[] {
   const database = getDb();
   const insertStmt = database.prepare(`
-    INSERT INTO log_files (id, serverId, name, path, tailLines)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO log_files (id, serverId, groupId, name, path, tailLines)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const insertMany = database.transaction((files: Omit<LogFile, 'createdAt'>[]) => {
     for (const lf of files) {
-      insertStmt.run(lf.id, lf.serverId, lf.name, lf.path, lf.tailLines);
+      insertStmt.run(lf.id, lf.serverId, lf.groupId, lf.name, lf.path, lf.tailLines);
     }
   });
 
@@ -253,4 +282,95 @@ export function cleanupDuplicateLogFiles(): { deletedCount: number; duplicates: 
   cleanup();
 
   return { deletedCount, duplicates };
+}
+
+// ==================== 日志分组 CRUD ====================
+
+// 获取所有分组
+export function getAllLogGroups(): LogGroup[] {
+  return getDb().prepare('SELECT * FROM log_groups ORDER BY sortOrder ASC, createdAt ASC').all() as LogGroup[];
+}
+
+// 获取指定服务器的分组
+export function getLogGroupsByServerId(serverId: string): LogGroup[] {
+  return getDb().prepare('SELECT * FROM log_groups WHERE serverId = ? ORDER BY sortOrder ASC, createdAt ASC').all(serverId) as LogGroup[];
+}
+
+// 根据 ID 获取分组
+export function getLogGroupById(id: string): LogGroup | undefined {
+  return getDb().prepare('SELECT * FROM log_groups WHERE id = ?').get(id) as LogGroup | undefined;
+}
+
+// 创建分组
+export function createLogGroup(group: Omit<LogGroup, 'createdAt'>): LogGroup {
+  const stmt = getDb().prepare(`
+    INSERT INTO log_groups (id, serverId, name, sortOrder)
+    VALUES (?, ?, ?, ?)
+  `);
+  stmt.run(group.id, group.serverId, group.name, group.sortOrder);
+  return getLogGroupById(group.id)!;
+}
+
+// 更新分组
+export function updateLogGroup(id: string, updates: Partial<LogGroup>): LogGroup | undefined {
+  const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'createdAt');
+  if (fields.length === 0) return getLogGroupById(id);
+
+  const setClause = fields.map(f => `${f} = ?`).join(', ');
+  const values = fields.map(f => (updates as Record<string, unknown>)[f]);
+
+  getDb().prepare(`UPDATE log_groups SET ${setClause} WHERE id = ?`).run(...values, id);
+  return getLogGroupById(id);
+}
+
+// 删除分组（日志文件的 groupId 会被设为 NULL）
+export function deleteLogGroup(id: string): boolean {
+  const result = getDb().prepare('DELETE FROM log_groups WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+// 批量更新分组排序
+export function updateLogGroupsOrder(groups: { id: string; sortOrder: number }[]): void {
+  const database = getDb();
+  const updateStmt = database.prepare('UPDATE log_groups SET sortOrder = ? WHERE id = ?');
+
+  const updateMany = database.transaction((items: { id: string; sortOrder: number }[]) => {
+    for (const item of items) {
+      updateStmt.run(item.sortOrder, item.id);
+    }
+  });
+
+  updateMany(groups);
+}
+
+// 更新日志文件的分组
+export function updateLogFileGroup(logFileId: string, groupId: string | null): LogFile | undefined {
+  getDb().prepare('UPDATE log_files SET groupId = ? WHERE id = ?').run(groupId, logFileId);
+  return getLogFileById(logFileId);
+}
+
+// 批量更新日志文件的分组
+export function updateLogFilesGroup(logFileIds: string[], groupId: string | null): void {
+  if (logFileIds.length === 0) return;
+
+  const database = getDb();
+  const updateStmt = database.prepare('UPDATE log_files SET groupId = ? WHERE id = ?');
+
+  const updateMany = database.transaction((ids: string[]) => {
+    for (const id of ids) {
+      updateStmt.run(groupId, id);
+    }
+  });
+
+  updateMany(logFileIds);
+}
+
+// 获取分组下的日志文件
+export function getLogFilesByGroupId(groupId: string): LogFile[] {
+  return getDb().prepare('SELECT * FROM log_files WHERE groupId = ? ORDER BY createdAt DESC').all(groupId) as LogFile[];
+}
+
+// 获取未分组的日志文件（指定服务器）
+export function getUngroupedLogFiles(serverId: string): LogFile[] {
+  return getDb().prepare('SELECT * FROM log_files WHERE serverId = ? AND groupId IS NULL ORDER BY createdAt DESC').all(serverId) as LogFile[];
 }
